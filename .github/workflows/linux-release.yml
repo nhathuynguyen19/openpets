@@ -1,0 +1,93 @@
+name: Linux Release
+
+on:
+  push:
+    tags:
+      - "linux-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  linux-release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies (CI runner only)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3 \
+            python3-gi \
+            python3-gi-cairo \
+            gir1.2-gtk-3.0 \
+            gir1.2-ayatanaappindicator3-0.1 \
+            webp-pixbuf-loader \
+            python3-venv \
+            xvfb xauth
+
+      - name: Install optional MCP SDK in a private test environment
+        run: |
+          /usr/bin/python3 -m venv --system-site-packages "$RUNNER_TEMP/openpets-mcp"
+          "$RUNNER_TEMP/openpets-mcp/bin/python" -m pip install --only-binary=:all: -r Linux/requirements-mcp.txt
+
+      - name: Check Python version
+        run: |
+          /usr/bin/python3 - <<'PY'
+          import sys
+          if sys.version_info < (3, 10):
+              raise SystemExit("python3 >= 3.10 is required")
+          print(f"python3 {sys.version.split()[0]} OK")
+          PY
+
+      - name: Run unit tests
+        env:
+          PYTHONPATH: "${{ github.workspace }}/Linux"
+        run: |
+          "$RUNNER_TEMP/openpets-mcp/bin/python" -m unittest discover -s Linux/tests -v
+
+      - name: GTK smoke tests
+        env:
+          PYTHONPATH: "Linux"
+        run: |
+          xvfb-run -a "$RUNNER_TEMP/openpets-mcp/bin/python" -m unittest discover -s Linux/tests -p 'test_*integration.py' -v
+          xvfb-run -a "$RUNNER_TEMP/openpets-mcp/bin/python" -m unittest discover -s Linux/tests -p test_gui_features.py -v
+          xvfb-run -a "$RUNNER_TEMP/openpets-mcp/bin/python" -m openpets_linux --smoke-test
+
+      - name: Resolve release version from tag
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          case "$TAG" in
+            linux-v*) VERSION="${TAG#linux-v}" ;;
+            *) echo "Unexpected Linux release tag: $TAG" >&2; exit 1 ;;
+          esac
+          if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.+-]+(\.[0-9A-Za-z.+-]+)*)?(\+[0-9A-Za-z.+-]+(\.[0-9A-Za-z.+-]+)*)?$ ]]; then
+            echo "Invalid Debian package version from tag: $VERSION" >&2
+            exit 1
+          fi
+          echo "OPENPETS_VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Build Debian package
+        run: |
+          bash scripts/package-linux.sh "$OPENPETS_VERSION" "$RUNNER_TEMP/linux-debs"
+
+      - name: Inspect Debian package
+        run: |
+          DEB="$RUNNER_TEMP/linux-debs/openpets_${OPENPETS_VERSION}_all.deb"
+          test -f "$DEB"
+          test "$(dpkg-deb -f "$DEB" Package)" = "openpets"
+          test "$(dpkg-deb -f "$DEB" Version)" = "$OPENPETS_VERSION"
+          test "$(dpkg-deb -f "$DEB" Architecture)" = "all"
+          dpkg-deb -I "$DEB"
+          dpkg-deb --contents "$DEB"
+
+      - name: Publish Linux release package
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: OpenPets Linux ${{ env.OPENPETS_VERSION }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: ${{ runner.temp }}/linux-debs/openpets_${{ env.OPENPETS_VERSION }}_all.deb
