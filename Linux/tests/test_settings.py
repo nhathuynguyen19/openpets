@@ -212,6 +212,15 @@ class DisplayOpacityTests(unittest.TestCase):
         os.environ["HOME"] = self.temporary
         self.settings = Settings()
 
+    def test_default_animation_speed_is_one(self):
+        self.assertEqual(self.settings.read()["display"]["animationSpeed"], 1.0)
+
+    def test_animation_speed_persists_and_preserves_other_display_fields(self):
+        self.settings.update({"display": {"animationSpeed": 1.5}})
+        display = self.settings.read()["display"]
+        self.assertEqual(display["animationSpeed"], 1.5)
+        self.assertEqual(display["scale"], DEFAULT_CONFIG["display"]["scale"])
+
     def test_fractional_opacity_persists_and_round_trips(self):
         self.settings.update({"display": {"pluginOpacity": 0.37, "messageOpacity": 0.05}})
         config = self.settings.read()

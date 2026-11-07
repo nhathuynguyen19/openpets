@@ -39,6 +39,7 @@ __all__ = [
     "classify_direction",
     "drag_animation",
     "IdlePicker",
+    "scaled_frame_duration",
 ]
 
 # Per-frame durations (ms), based on OpenPetsKit PetAnimation.swift, shortened
@@ -88,6 +89,15 @@ IDLE_INTERVAL_MAX_MS = 7000
 # pet from gesturing back-to-back so gait/action transitions stay clean and
 # the pet still spends most of its time walking or resting between legs.
 IDLE_COOLDOWN_MS = 2000
+
+
+def scaled_frame_duration(duration_ms: int, speed: float) -> int:
+    """Return a frame duration adjusted by a positive animation speed factor.
+
+    A factor of 1 preserves the atlas timing; larger factors shorten each
+    frame duration and therefore make the animation play faster.
+    """
+    return max(1, int(round(duration_ms / max(0.01, float(speed)))))
 
 
 def classify_direction(

@@ -40,6 +40,7 @@ from .animation import (
     IdlePicker,
     drag_animation,
     look_direction_cell,
+    scaled_frame_duration,
 )
 from .motion import (
     MODE_FREE_ROAM,
@@ -47,6 +48,7 @@ from .motion import (
     MODE_OFF,
     MOTION_INTERVAL_MS,
     MotionController,
+    ROAM_SPEED_PX_PER_SEC,
     is_valid_mode,
 )
 
@@ -91,6 +93,9 @@ class PetWindow(Gtk.Window):
             saved_display = {}
         self.message_bubble_width = self._bounded_display_value(
             saved_display.get("messageBubbleWidth"), MESSAGE_MAX_WIDTH, 120, 600, integer=True
+        )
+        self.animation_speed = self._bounded_display_value(
+            saved_display.get("animationSpeed"), 1.0, 0.5, 2.0
         )
         self.message_font_size = self._bounded_display_value(
             saved_display.get("messageFontSize"), 10.0, 6, 24
@@ -370,8 +375,7 @@ class PetWindow(Gtk.Window):
         dialog = Gtk.Dialog(title="Settings", transient_for=self,
                             flags=Gtk.DialogFlags.MODAL)
         dialog.set_default_size(MCP_SETTINGS_DEFAULT_WIDTH, -1)
-        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
-        dialog.add_button("Apply", Gtk.ResponseType.OK)
+        dialog.add_button("OK", Gtk.ResponseType.OK)
         grid = Gtk.Grid(column_spacing=8, row_spacing=10, margin=12)
         dialog.get_content_area().add(grid)
 
@@ -379,6 +383,8 @@ class PetWindow(Gtk.Window):
         # --- Display: pet size, message bubble width, message font size -----
         controls = (
             ("Pet size", "scale", self.scale, 0.2, 2.0, 0.05, 2),
+            ("Default animation speed", "animationSpeed",
+             self.animation_speed, 0.5, 2.0, 0.05, 2),
             ("Message bubble width", "messageBubbleWidth",
              self.message_bubble_width, 120, 600, 10, 0),
             ("Message font size", "messageFontSize",
@@ -484,19 +490,30 @@ class PetWindow(Gtk.Window):
         )
         grid.attach(blur_note, 0, row, 2, 1)
 
+        def collect_values():
+            values = {key: control.get_value() for key, control in scales}
+            values["themeMode"] = theme.get_active_id() or "dark"
+            values["blurBackground"] = blur.get_active()
+            values["pluginSide"] = "left" if side_left.get_active() else "right"
+            return values
+
+        def apply_live(*_args):
+            try:
+                self.apply_settings(collect_values())
+            except (OSError, ValueError, RuntimeError) as error:
+                self.plugins.show_error(f"Could not apply settings: {error}")
+
+        # Settings are live and persistent while the dialog is open; OK only
+        # dismisses it. Connect after initializing widgets to avoid a startup
+        # write for every control.
+        for _key, control in scales:
+            control.connect("value-changed", apply_live)
+        theme.connect("changed", apply_live)
+        blur.connect("toggled", apply_live)
+        side_left.connect("toggled", apply_live)
         dialog.show_all()
-        response = dialog.run()
-        values = {key: scale.get_value() for key, scale in scales}
-        values["themeMode"] = theme.get_active_id() or "dark"
-        values["blurBackground"] = blur.get_active()
-        values["pluginSide"] = "left" if side_left.get_active() else "right"
+        dialog.run()
         dialog.destroy()
-        if response != Gtk.ResponseType.OK:
-            return
-        try:
-            self.apply_settings(values)
-        except (OSError, ValueError, RuntimeError) as error:
-            self.plugins.show_error(f"Could not apply settings: {error}")
 
     def apply_settings(self, values):
         """Validate, persist and apply every display/appearance value together.
@@ -532,6 +549,9 @@ class PetWindow(Gtk.Window):
             "chatBubbleDurationSeconds", self.chat_bubble_duration_seconds,
             1, 60, integer=True,
         )
+        animation_speed = bounded(
+            "animationSpeed", self.animation_speed, 0.5, 2.0
+        )
         theme = values.get("themeMode", self.appearance["themeMode"])
         if theme not in ("dark", "light"):
             theme = "dark"
@@ -540,6 +560,7 @@ class PetWindow(Gtk.Window):
             plugin_side = "right"
         updated = {
             "scale": pet_scale,
+            "animationSpeed": animation_speed,
             "messageBubbleWidth": bubble_width,
             "messageFontSize": font_size,
             "chatBubbleFontSize": chat_font_size,
@@ -565,6 +586,8 @@ class PetWindow(Gtk.Window):
             self.plugins.show_error(f"Could not save settings: {error}")
             return
         self.scale = pet_scale
+        animation_speed_changed = animation_speed != self.animation_speed
+        self.animation_speed = animation_speed
         self.message_bubble_width = bubble_width
         self.message_font_size = font_size
         self.chat_bubble_font_size = chat_font_size
@@ -590,6 +613,8 @@ class PetWindow(Gtk.Window):
         self.relayout()
         self.update_input_shape()
         self.queue_draw()
+        if animation_speed_changed:
+            self.schedule_frame()
         if updated["blurBackground"]:
             if not self.composited:
                 self.plugins.show_error(
@@ -1063,8 +1088,19 @@ class PetWindow(Gtk.Window):
     def schedule_frame(self):
         if self.frame_source:
             GLib.source_remove(self.frame_source)
+        speed = self.animation_speed
+        if (
+            self.motion.mode == MODE_FREE_ROAM
+            and self.motion_animation is not None
+            and self.motion.state.pace_mode == "walking"
+            and self.motion.state.pace_speed > 0
+        ):
+            speed *= self.motion.state.pace_speed / ROAM_SPEED_PX_PER_SEC
+        duration = scaled_frame_duration(
+            DURATIONS[self.current_animation][self.frame], speed
+        )
         self.frame_source = GLib.timeout_add(
-            DURATIONS[self.current_animation][self.frame], self.advance_frame
+            duration, self.advance_frame
         )
 
     def advance_frame(self):

@@ -21,6 +21,7 @@ from openpets_linux.animation import (  # noqa: E402
     drag_animation,
     look_direction_cell,
     look_direction_index,
+    scaled_frame_duration,
 )
 
 import random
@@ -45,6 +46,12 @@ class TestAnimationCatalog(unittest.TestCase):
             for frame_ms in durations:
                 self.assertIsInstance(frame_ms, int)
                 self.assertGreater(frame_ms, 0)
+
+    def test_frame_duration_scales_with_animation_speed(self):
+        self.assertEqual(scaled_frame_duration(100, 1.0), 100)
+        self.assertEqual(scaled_frame_duration(100, 2.0), 50)
+        self.assertEqual(scaled_frame_duration(100, 0.5), 200)
+        self.assertEqual(scaled_frame_duration(1, 2.0), 1)
 
     def test_direction_animations(self):
         self.assertEqual(DIRECTION_ANIMATIONS["right"], "running-right")

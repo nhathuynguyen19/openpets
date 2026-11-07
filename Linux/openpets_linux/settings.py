@@ -44,6 +44,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "linuxPlugins": {"chatBubble": False},
     "display": {
         "scale": 0.42,
+        "animationSpeed": 1.0,
         "messageAreaHeight": 56,
         "themeMode": "dark",
         "pluginOpacity": 0.94,
