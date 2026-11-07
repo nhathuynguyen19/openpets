@@ -308,6 +308,8 @@ def compute_layout(
     unread_count: int = 0,
     plugin_side: str = "right",
     chat_message: dict | None = None,
+    chat_side: str | None = None,
+    chat_max_width: int = CHAT_BUBBLE_MAX_WIDTH,
     chat_font_size: float = CHAT_BUBBLE_TEXT_SIZE,
     chat_aspect_ratio: float = CHAT_BUBBLE_ASPECT_RATIO,
     chat_corner_radius_percent: float = CHAT_BUBBLE_CORNER_RADIUS_PERCENT,
@@ -331,6 +333,12 @@ def compute_layout(
     plugin_opacity = _bounded_opacity(plugin_opacity, CHIP_ALPHA)
     message_opacity = _bounded_opacity(message_opacity, BUBBLE_ALPHA)
     chat_bubble_opacity = _bounded_opacity(chat_bubble_opacity, BUBBLE_ALPHA)
+    if chat_side not in ("left", "right"):
+        chat_side = "left" if plugin_side == "right" else "right"
+    try:
+        chat_max_width = max(1, min(CHAT_BUBBLE_MAX_WIDTH, int(chat_max_width)))
+    except (TypeError, ValueError, OverflowError):
+        chat_max_width = CHAT_BUBBLE_MAX_WIDTH
     if isinstance(border_radius, bool) or not isinstance(border_radius, (int, float)):
         border_radius = 14.0
     try:
@@ -460,11 +468,10 @@ def compute_layout(
     # pointer reaches toward the pet, with the hit target spanning the pointer.
     chat_bubble = None
     if isinstance(chat_message, dict) and isinstance(chat_message.get("text"), str) and chat_message["text"].strip():
-        chat_side = "left" if plugin_side == "right" else "right"
         side_width = max(1, (width - cell_width) // 2 - CHIP_PET_GAP)
         chat_width, chat_height, chat_lines = estimate_chat_bubble_size(
             chat_message["text"],
-            max_width=min(CHAT_BUBBLE_MAX_WIDTH, side_width),
+            max_width=min(CHAT_BUBBLE_MAX_WIDTH, side_width, chat_max_width),
             font_size=chat_font_size,
             aspect_ratio=chat_aspect_ratio,
             corner_radius_percent=chat_corner_radius_percent,

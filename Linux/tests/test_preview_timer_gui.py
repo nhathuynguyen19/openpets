@@ -138,14 +138,13 @@ class PreviewTimerGUITests(unittest.TestCase):
                 if self.context.find_source_by_id(tag) is not None]
         self.assertEqual(live, [], "An untracked preview source is still alive")
 
-    def test_expired_preview_is_removed_after_final_queued_bubble(self):
+    def test_expired_preview_is_removed_while_bubbles_remain_queued(self):
         self._dispatch_preview_once()
         for preview in self.window.preview_messages.values():
             preview["expires_at"] = time.monotonic() - 1
         self._dispatch_preview_once()
         self.assertTrue(self.window._chat_bubble_queue_active())
-        self.assertEqual(len(self.window.preview_messages), 1,
-                         "Expired preview must stay while queued bubbles are visible")
+        self.assertEqual(self.window.preview_messages, {})
         for _ in range(3):
             source = self.context.find_source_by_id(self.window.chat_bubble_source)
             self.assertIsNotNone(source)
@@ -154,9 +153,7 @@ class PreviewTimerGUITests(unittest.TestCase):
             self._pump_until(lambda: self.window.chat_bubble_source != previous)
         self.assertFalse(self.window._chat_bubble_queue_active())
         self.assertEqual(len(self.window.preview_messages), 0)
-        previous = self.window.preview_source
-        self.context.find_source_by_id(previous).set_ready_time(0)
-        self._pump_until(lambda: self.window.preview_source == 0)
+        self.assertEqual(self.window.preview_source, 0)
         live = [tag for tag in self.preview_sources
                 if self.context.find_source_by_id(tag) is not None]
         self.assertEqual(live, [])

@@ -90,7 +90,7 @@ class TestCollapsedMessagePreviewGUI(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(prefix="openpets-bubble-sequence-") as directory:
             window = self._make_window(directory)
-            del window.relayout  # use the real path that synchronizes the overlay
+            del window.relayout  # use the real path that rebuilds the pet layout
             window.chat_bubble_enabled = True
             window.chat_bubble_duration_seconds = 8
             scheduled = []
@@ -112,7 +112,7 @@ class TestCollapsedMessagePreviewGUI(unittest.TestCase):
                             delay, callback = scheduled[-1]
                             self.assertEqual(delay, 8)
                             callback()  # expire the previous bubble before next notify
-                            self.assertIsNone(window.chat_bubble_overlay.message)
+                            self.assertIsNone(window.layout.chat_bubble)
 
                         response = window.handle_command({
                             "type": "notify",
@@ -124,12 +124,12 @@ class TestCollapsedMessagePreviewGUI(unittest.TestCase):
                             },
                         })
                         self.assertTrue(response["ok"])
-                        self.assertEqual(window.chat_bubble_overlay.message["text"], text)
+                        self.assertEqual(window.layout.chat_bubble.message["text"], text)
 
                     delay, callback = scheduled[-1]
                     self.assertEqual(delay, 8)
                     callback()
-                    self.assertIsNone(window.chat_bubble_overlay.message)
+                    self.assertIsNone(window.layout.chat_bubble)
                 finally:
                     window.cleanup()
 
@@ -231,19 +231,36 @@ class TestCollapsedMessagePreviewGUI(unittest.TestCase):
                 window.chat_bubble_enabled = True
                 window.plugins.chat_bubble_enabled = True
                 window.relayout = window._real_relayout
+                pet_anchor = (
+                    window.motion.position[0] + window.layout.pet_x,
+                    window.motion.position[1] + window.layout.pet_top,
+                )
                 response = window.handle_command(
                     _notify("chat-preview", "Chat notification", "message",
                             "This remains visible in collapsed message previews.")
                 )
                 self.assertTrue(response["ok"])
                 self.assertIsNotNone(window.plugins.chat_bubble.current)
+                self.assertIsNotNone(window.layout.chat_bubble)
+                self.assertEqual(window.layout.chat_bubble.thread_id, "chat-preview")
+                self.assertGreater(window.width, 360)
                 self.assertEqual(
-                    window.chat_bubble_overlay.message["threadId"], "chat-preview"
+                    (window.motion.position[0] + window.layout.pet_x,
+                     window.motion.position[1] + window.layout.pet_top),
+                    pet_anchor,
                 )
-                self.assertTrue(window.chat_bubble_overlay.get_visible())
                 self.assertEqual(
                     [preview.thread_id for preview in window.layout.preview_rects],
                     ["chat-preview"],
+                )
+                window._cancel_chat_bubble_timer()
+                window._advance_chat_bubble()
+                self.assertIsNone(window.layout.chat_bubble)
+                self.assertEqual(window.width, 360)
+                self.assertEqual(
+                    (window.motion.position[0] + window.layout.pet_x,
+                     window.motion.position[1] + window.layout.pet_top),
+                    pet_anchor,
                 )
             finally:
                 window.cleanup()
@@ -341,7 +358,7 @@ class TestCollapsedMessagePreviewGUI(unittest.TestCase):
             finally:
                 window.cleanup()
 
-    def test_expired_preview_keeps_layout_stable_until_final_chat_bubble_expires(self):
+    def test_preview_expires_on_its_own_ttl_while_chat_bubbles_are_queued(self):
         with tempfile.TemporaryDirectory(prefix="openpets-preview-layout-hold-") as directory:
             window = self._make_window(directory)
             window.start()
@@ -359,25 +376,67 @@ class TestCollapsedMessagePreviewGUI(unittest.TestCase):
                     self.assertTrue(response["ok"])
                     window.refresh()
                     self.assertEqual(list(window.preview_messages), ["final"])
-                    pet_top_while_bubble_visible = window.layout.pet_top
+                    pet_anchor = (
+                        window.motion.position[0] + window.layout.pet_x,
+                        window.motion.position[1] + window.layout.pet_top,
+                    )
 
-                    # The preview TTL passes first, but deleting it would
-                    # reflow the window while the comic bubble is still shown.
+                    # Preview lifetime is independent of the chat bubble TTL.
                     clock.value = window.preview_messages["final"]["expires_at"]
                     window._preview_source = 0
                     window._preview_sweep()
-                    self.assertIn("final", window.preview_messages)
+                    self.assertNotIn("final", window.preview_messages)
+                    self.assertTrue(window._chat_bubble_queue_active())
+                    self.assertEqual(window.layout.preview_rects, ())
                     self.assertEqual(
-                        window.layout.pet_top, pet_top_while_bubble_visible
+                        (window.motion.position[0] + window.layout.pet_x,
+                         window.motion.position[1] + window.layout.pet_top),
+                        pet_anchor,
                     )
 
-                    # Expire the final bubble. Its callback removes the old
-                    # preview and relayouts once, after the bubble is cleared.
+                    # The independent bubble queue continues after its preview is gone.
                     window._cancel_chat_bubble_timer()
                     window._advance_chat_bubble()
-                    self.assertNotIn("final", window.preview_messages)
                     self.assertIsNone(window.plugins.chat_bubble.current)
                     window._reschedule_preview_sweep()
+            finally:
+                window.cleanup()
+
+    def test_pet_screen_anchor_stays_fixed_across_preview_and_chat_relayouts(self):
+        from openpets_linux.ui import GLib
+
+        with tempfile.TemporaryDirectory(prefix="openpets-pet-anchor-") as directory:
+            window = self._make_window(directory)
+            window.start()
+            try:
+                window.move(120, 180)
+                while GLib.MainContext.default().pending():
+                    GLib.MainContext.default().iteration(False)
+                window.motion.set_position(*window.get_position())
+                window.handle_command(_notify("seed", "Seed", "done"))
+                window.refresh()
+                window.toggle_messages_collapsed(True)
+
+                def screen_anchor():
+                    x, y = window.motion.position
+                    return (x + window.layout.pet_x, y + window.layout.pet_top)
+
+                anchor = screen_anchor()
+                response = window.handle_command(
+                    _notify("preview-two", "Second preview", "running")
+                )
+                self.assertTrue(response["ok"])
+                self.assertEqual(screen_anchor(), anchor)
+
+                window.chat_bubble_enabled = True
+                window.plugins.chat_bubble_enabled = True
+                window.relayout = window._real_relayout
+                response = window.handle_command(
+                    _notify("chat-layout", "Chat", "message", "Bubble expands the pet layout.")
+                )
+                self.assertTrue(response["ok"])
+                self.assertIsNotNone(window.layout.chat_bubble)
+                self.assertEqual(screen_anchor(), anchor)
             finally:
                 window.cleanup()
 

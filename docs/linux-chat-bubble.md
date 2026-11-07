@@ -26,6 +26,11 @@ the side opposite the plugin status stack.
 - **Settings → Comic chat bubble duration** independently controls how long a
   queued chat bubble stays visible (1–60 seconds). It does not change the
   lifetime of collapsed message previews.
+- The bubble is drawn inside the pet window's layout. Its width and height
+  expand that layout while it is visible; the window contracts after the queue
+  empties, while relayouts keep the pet sprite fixed at its screen position.
+  Near a horizontal screen edge, the bubble uses the side with more available
+  room and the plugin stack remains on the opposite side.
 - Pango size calculations and wrapped line layouts are bounded in-memory
   caches; repeated relayouts and redraws reuse the measurement instead of
   reshaping the same text on every frame.

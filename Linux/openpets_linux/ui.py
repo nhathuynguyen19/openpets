@@ -28,9 +28,9 @@ from .notifications import NotificationHistory
 from .chat_bubble import (
     CHAT_BUBBLE_ASPECT_RATIO,
     CHAT_BUBBLE_CORNER_RADIUS_PERCENT,
+    CHAT_BUBBLE_MAX_WIDTH,
     CHAT_BUBBLE_TEXT_SIZE,
 )
-from .chat_bubble_ui import ChatBubbleOverlay
 from .logging_setup import elapsed_ms, log_process_memory
 from .mcp_runtime import MCPPortBusy, MCPProcess
 from .animation import (
@@ -47,15 +47,16 @@ from .motion import (
     MODE_OFF,
     MOTION_INTERVAL_MS,
     MotionController,
-    clamp_position_to_workarea,
     is_valid_mode,
 )
 
 from .overlay import (
+    CHIP_PET_GAP,
     MESSAGE_MAX_WIDTH,
     MESSAGE_PAD_X,
     compute_layout,
     draw_overlay,
+    estimate_chat_bubble_size,
     input_rectangles,
     hit_test,
 )
@@ -258,7 +259,6 @@ class PetWindow(Gtk.Window):
         self._shutdown_requested = False
         from .plugin_ui import PluginController
         self.plugins = PluginController(self, self.settings, self._plugins_changed)
-        self.chat_bubble_overlay = ChatBubbleOverlay(self)
         for label, callback in (("Settings…", self.open_settings),
                                 ("Choose pet…", self.open_chooser),
                                 ("OpenCode setup…", self.open_onboarding),
@@ -298,8 +298,59 @@ class PetWindow(Gtk.Window):
         value = max(minimum, min(maximum, value))
         return int(round(value)) if integer else float(value)
 
-    def _desired_width(self, chat_message=None):
-        return max(360, self.cell_width, self.message_bubble_width + 2 * MESSAGE_PAD_X)
+    def _desired_width(self, chat_message=None, chat_max_width=CHAT_BUBBLE_MAX_WIDTH):
+        width = max(360, self.cell_width, self.message_bubble_width + 2 * MESSAGE_PAD_X)
+        if chat_message is None and getattr(self, "chat_bubble_enabled", False):
+            queue = getattr(getattr(self, "plugins", None), "chat_bubble", None)
+            chat_message = getattr(queue, "current", None)
+        if (isinstance(chat_message, dict)
+                and isinstance(chat_message.get("text"), str)
+                and chat_message["text"].strip()):
+            bubble_width, _height, _lines = estimate_chat_bubble_size(
+                chat_message["text"],
+                max_width=min(CHAT_BUBBLE_MAX_WIDTH, max(1, int(chat_max_width))),
+                font_size=getattr(self, "chat_bubble_font_size", CHAT_BUBBLE_TEXT_SIZE),
+                aspect_ratio=getattr(self, "chat_bubble_aspect_ratio", CHAT_BUBBLE_ASPECT_RATIO),
+                corner_radius_percent=getattr(
+                    self, "chat_bubble_corner_radius", CHAT_BUBBLE_CORNER_RADIUS_PERCENT
+                ),
+            )
+            width = max(width, self.cell_width + 2 * (bubble_width + CHIP_PET_GAP))
+        return width
+
+    def _chat_layout_options(self, message):
+        """Choose a bubble side with room while keeping the pet as the anchor."""
+        preferred = "left" if self.plugin_side == "right" else "right"
+        if not isinstance(message, dict) or not message.get("text"):
+            return self.plugin_side, preferred, CHAT_BUBBLE_MAX_WIDTH
+
+        display = self.get_display()
+        window_x, window_y = self.get_position()
+        pet_x = window_x + self.layout.pet_x
+        pet_y = window_y + self.layout.pet_top
+        monitor = display.get_monitor_at_point(pet_x, pet_y) or display.get_primary_monitor()
+        if monitor is None:
+            return self.plugin_side, preferred, CHAT_BUBBLE_MAX_WIDTH
+        area = monitor.get_workarea()
+        available = {
+            "left": max(0, pet_x - area.x - CHIP_PET_GAP),
+            "right": max(
+                0, area.x + area.width - (pet_x + self.cell_width) - CHIP_PET_GAP
+            ),
+        }
+        required, _height, _lines = estimate_chat_bubble_size(
+            message["text"], max_width=CHAT_BUBBLE_MAX_WIDTH,
+            font_size=self.chat_bubble_font_size,
+            aspect_ratio=self.chat_bubble_aspect_ratio,
+            corner_radius_percent=self.chat_bubble_corner_radius,
+        )
+        other = "right" if preferred == "left" else "left"
+        side = preferred
+        if available[side] < required and available[other] > available[side]:
+            side = other
+        # The plugin stack stays opposite the bubble, including at a screen edge.
+        layout_plugin_side = "right" if side == "left" else "left"
+        return layout_plugin_side, side, max(1, min(CHAT_BUBBLE_MAX_WIDTH, available[side]))
 
     def _plugins_changed(self):
         self.chat_bubble_enabled = self.plugins.chat_bubble_enabled
@@ -574,7 +625,6 @@ class PetWindow(Gtk.Window):
         self.show_all()
         self._schedule_toggle_hide()
         self.restore_position()
-        self._sync_chat_bubble_overlay()
         self.plugins.start()
         if self.settings.read().get("linuxMCPEnabled", True) is not False:
             self.mcp_item.set_active(True)
@@ -602,8 +652,23 @@ class PetWindow(Gtk.Window):
         # truncates subpixel motion and causes jitter during owned movement.
         self.motion.set_size(self.width, self.height)
         self._sync_motion_workarea(*self.get_position())
-        self._sync_chat_bubble_overlay()
+        if self._sync_chat_bubble_side():
+            self.update_input_shape()
+            self.queue_draw()
         return False
+
+    def _sync_chat_bubble_side(self):
+        """Re-evaluate the bubble side when dragging moves the pet across monitors."""
+        if not self.chat_bubble_enabled:
+            return False
+        message = self.plugins.chat_bubble.current
+        if message is None:
+            return False
+        _plugin_side, chat_side, _max_width = self._chat_layout_options(message)
+        if self.layout.chat_bubble is not None and self.layout.chat_bubble.side == chat_side:
+            return False
+        self.relayout()
+        return True
 
     def _sync_motion_workarea(self, x, y):
         """Keep autonomous motion initialized across X11 placement races."""
@@ -774,11 +839,7 @@ class PetWindow(Gtk.Window):
         if not self.chat_bubble_enabled:
             return GLib.SOURCE_REMOVE
         self.plugins.chat_bubble.advance()
-        if not self._chat_bubble_queue_active():
-            # Keep expired collapsed previews in place while any comic bubble
-            # is visible, then remove them in the same relayout that clears the
-            # final bubble so the pet and bubble do not jump mid-message.
-            self._remove_expired_previews()
+        self._remove_expired_previews()
         self._sync_motion_task_state()
         self.relayout()
         self.update_input_shape()
@@ -809,9 +870,7 @@ class PetWindow(Gtk.Window):
         )
 
     def _remove_expired_previews(self, now=None):
-        """Remove expired previews unless a comic bubble still owns the layout."""
-        if self._chat_bubble_queue_active():
-            return False
+        """Remove previews at their own expiry, independent of the chat queue."""
         if now is None:
             now = time.monotonic()
         expired = [
@@ -978,8 +1037,7 @@ class PetWindow(Gtk.Window):
                         if self.plugins.chat_bubble.enqueue(notification):
                             self._schedule_chat_bubble_advance()
                             # enqueue() makes the first item current immediately;
-                            # sync its separate overlay now rather than waiting
-                            # until the expiry timer advances the queue.
+                            # include it in the pet layout before the timer advances.
                             self._sync_motion_task_state()
                             self.relayout()
                             self.update_input_shape()
@@ -1086,7 +1144,14 @@ class PetWindow(Gtk.Window):
         visible_messages, visible_previews = message_surfaces_for_layout(
             self.message_rows, self.preview_messages.values()
         )
-        self.width = self._desired_width()
+        chat_message = (
+            self.plugins.chat_bubble.current
+            if self.chat_bubble_enabled else None
+        )
+        layout_plugin_side, chat_side, chat_max_width = self._chat_layout_options(
+            chat_message
+        )
+        self.width = self._desired_width(chat_message, chat_max_width)
         self.layout = compute_layout(self.width, self.cell_width, self.cell_height,
                                      self.plugins.surfaces(), visible_messages,
                                      theme_mode=self.appearance["themeMode"],
@@ -1098,67 +1163,27 @@ class PetWindow(Gtk.Window):
                                      unread_count=self.unread_message_count,
                                      message_max_width=self.message_bubble_width,
                                       message_font_size=self.message_font_size,
-                                      plugin_side=self.plugin_side,
-                                       preview_messages=visible_previews,
-                                       chat_font_size=self.chat_bubble_font_size,
-                                       chat_aspect_ratio=self.chat_bubble_aspect_ratio,
-                                       chat_corner_radius_percent=self.chat_bubble_corner_radius,
-                                         chat_message=None)
-        if self.height != self.layout.total_height or previous_width != self.width:
+                                      plugin_side=layout_plugin_side,
+                                        preview_messages=visible_previews,
+                                        chat_message=chat_message,
+                                        chat_side=chat_side,
+                                        chat_max_width=chat_max_width,
+                                        chat_font_size=self.chat_bubble_font_size,
+                                        chat_aspect_ratio=self.chat_bubble_aspect_ratio,
+                                        chat_corner_radius_percent=self.chat_bubble_corner_radius)
+        if (self.height != self.layout.total_height or previous_width != self.width
+                or previous_top != self.layout.pet_top
+                or previous_pet_x != self.layout.pet_x):
             x, y = self.get_position()
-            # Preserve sprite screen anchor when content changes above/below
-            # the sprite (chips appear, messages appear/disappear) or the
-            # window width changes. Adjust so window_x + pet_top stays constant.
+            # Keep the sprite at the exact same screen coordinate when any
+            # layout band changes, even if the window must extend past a screen edge.
             y += previous_top - self.layout.pet_top
             x += previous_pet_x - self.layout.pet_x
             self.height = self.layout.total_height
             self.resize(self.width, self.height)
-            # Clamp the whole layout (chips above pet, messages below) inside
-            # the monitor workarea. total_height includes both bands.
             self.motion.set_size(self.width, self.height)
-            display = self.get_display()
-            monitor = display.get_monitor_at_point(x, y)
-            if monitor is None:
-                monitor = display.get_primary_monitor()
-            if monitor is not None:
-                area = monitor.get_workarea()
-                x, y = clamp_position_to_workarea(
-                    x, y, self.width, self.height,
-                    (area.x, area.y, area.width, area.height),
-                )
-                self.motion.set_workarea((area.x, area.y, area.width, area.height))
             self.move(x, y)
             self.motion.set_position(x, y)
-        self._sync_chat_bubble_overlay()
-
-    def _sync_chat_bubble_overlay(self):
-        overlay = getattr(self, "chat_bubble_overlay", None)
-        if overlay is None:
-            return
-        if not self.chat_bubble_enabled or not self.get_visible():
-            overlay.set_parent_visible(False)
-            return
-        message = self.plugins.chat_bubble.current
-        if message is None:
-            overlay.set_bubble(None, pet_x=0, pet_y=0, cell_width=0,
-                               cell_height=0, workarea=None, plugin_side=self.plugin_side)
-            return
-        window_x, window_y = self.get_position()
-        pet_x = window_x + self.layout.pet_x
-        pet_y = window_y + self.layout.pet_top
-        display = self.get_display()
-        monitor = display.get_monitor_at_point(pet_x, pet_y) or display.get_primary_monitor()
-        area = monitor.get_workarea() if monitor is not None else None
-        workarea = (area.x, area.y, area.width, area.height) if area is not None else None
-        overlay.set_bubble(
-            message, pet_x=pet_x, pet_y=pet_y,
-            cell_width=self.cell_width, cell_height=self.cell_height,
-            workarea=workarea, plugin_side=self.plugin_side,
-            font_size=self.chat_bubble_font_size,
-            aspect_ratio=self.chat_bubble_aspect_ratio,
-            corner_radius_percent=self.chat_bubble_corner_radius,
-            opacity=self.appearance["chatBubbleOpacity"],
-        )
 
     def update_input_shape(self):
         if self.get_window() is None:
@@ -1244,7 +1269,7 @@ class PetWindow(Gtk.Window):
         context.restore()
         draw_overlay(
             context, self.layout, show_toggle=self.message_toggle_visible,
-            draw_chat=False,
+            draw_chat=True,
         )
         return False
 
@@ -1263,6 +1288,8 @@ class PetWindow(Gtk.Window):
             elif hit is not None and hit.kind == "message-collapse":
                 self.toggle_messages_collapsed(True)
             elif hit is not None and hit.kind == "message":
+                self.open_notifications()
+            elif hit is not None and hit.kind == "chat":
                 self.open_notifications()
             elif hit is not None and hit.kind == "pet":
                 self.begin_drag(event)
@@ -1410,16 +1437,12 @@ class PetWindow(Gtk.Window):
         if self.motion_source:
             GLib.source_remove(self.motion_source)
             self.motion_source = 0
-        overlay = getattr(self, "chat_bubble_overlay", None)
-        if overlay is not None:
-            overlay.set_parent_visible(False)
 
     def _on_show(self):
         """Window shown: resume the motion timer if a mode is active."""
         if self.motion.mode != MODE_OFF:
             self.motion.resume()
         self._reschedule_motion_timer()
-        self._sync_chat_bubble_overlay()
 
     def _query_cursor_position(self):
         """Query the global pointer position. Returns (x, y) or None."""
@@ -1761,9 +1784,6 @@ class PetWindow(Gtk.Window):
 
         self.save_position()
         self.plugins.close()
-        overlay = getattr(self, "chat_bubble_overlay", None)
-        if overlay is not None:
-            overlay.destroy()
         if self.listener is not None:
             self.listener.close()
             cleanup_socket(self.socket_path, self.socket_identity)

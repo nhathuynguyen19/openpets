@@ -36,11 +36,8 @@ from openpets_linux.overlay import (  # noqa: E402
 from openpets_linux.settings import DEFAULT_CONFIG  # noqa: E402
 from openpets_linux.ui import PetWindow  # noqa: E402
 from openpets_linux.ui import message_surfaces_for_layout  # noqa: E402
-from openpets_linux.chat_bubble_ui import ChatBubbleOverlay  # noqa: E402
 from openpets_linux import mcp_server  # noqa: E402
 from openpets_linux.overlay import _estimate_chat_bubble_size_cached  # noqa: E402
-
-HAS_DISPLAY = bool(os.environ.get("DISPLAY"))
 
 
 class ChatClassificationTests(unittest.TestCase):
@@ -366,95 +363,62 @@ class ChatBubbleGeometryTests(unittest.TestCase):
     def test_unicode_combining_marks_stay_with_their_base_character(self):
         self.assertEqual(list(_text_graphemes("e\u0301x")), ["e\u0301", "x"])
 
-    @unittest.skipUnless(HAS_DISPLAY, "GTK tests require DISPLAY (use Xvfb)")
-    def test_overlay_movement_reuses_cached_raster(self):
-        import gi
-        gi.require_version("Gtk", "3.0")
-        from gi.repository import Gtk
-
-        parent = Gtk.Window()
-        overlay = ChatBubbleOverlay(parent)
-        try:
-            overlay.set_bubble(
-                self.message, pet_x=300, pet_y=250, cell_width=140,
-                cell_height=100, workarea=(0, 0, 1920, 1080),
-                plugin_side="right",
-            )
-            rendered = overlay.render_count
-            original_surface = overlay.surface
-            overlay.move_with_pet(420, 330)
-            self.assertEqual(overlay.render_count, rendered)
-            self.assertIs(overlay.surface, original_surface)
-
-            overlay.set_bubble(
-                {**self.message, "text": "Changed content"},
-                pet_x=420, pet_y=330, cell_width=140,
-                cell_height=100, workarea=(0, 0, 1920, 1080),
-                plugin_side="right",
-            )
-            self.assertGreater(overlay.render_count, rendered)
-        finally:
-            overlay.destroy()
-            parent.destroy()
-
-    @unittest.skipUnless(HAS_DISPLAY, "GTK tests require DISPLAY (use Xvfb)")
-    def test_expired_bubble_releases_cached_raster(self):
-        import gi
-        gi.require_version("Gtk", "3.0")
-        from gi.repository import Gtk
-
-        parent = Gtk.Window()
-        overlay = ChatBubbleOverlay(parent)
-        try:
-            overlay.set_bubble(
-                self.message, pet_x=300, pet_y=250, cell_width=140,
-                cell_height=100, workarea=(0, 0, 1920, 1080),
-                plugin_side="right",
-            )
-            self.assertIsNotNone(overlay.surface)
-            overlay.set_bubble(
-                None, pet_x=0, pet_y=0, cell_width=0, cell_height=0,
-                workarea=None, plugin_side="right",
-            )
-            self.assertIsNone(overlay.surface)
-            self.assertIsNone(overlay.cache_key)
-        finally:
-            overlay.destroy()
-            parent.destroy()
-
-    @unittest.skipUnless(HAS_DISPLAY, "GTK tests require DISPLAY (use Xvfb)")
-    def test_overlay_initial_window_is_large_enough_for_cached_surface(self):
-        import gi
-        gi.require_version("Gtk", "3.0")
-        from gi.repository import Gtk
-
-        parent = Gtk.Window()
-        overlay = ChatBubbleOverlay(parent)
-        try:
-            parent.show()
-            overlay.set_bubble(
-                self.message, pet_x=500, pet_y=300, cell_width=100,
-                cell_height=100, workarea=(0, 0, 1366, 768),
-                plugin_side="right",
-            )
-            while Gtk.events_pending():
-                Gtk.main_iteration_do(False)
-            window_width, window_height = overlay.get_size()
-            self.assertGreaterEqual(window_width, overlay.surface.get_width())
-            self.assertGreaterEqual(window_height, overlay.surface.get_height())
-        finally:
-            overlay.destroy()
-            parent.destroy()
-
-    def test_pet_layout_size_is_independent_of_chat_bubble_text(self):
+    def test_pet_layout_width_expands_for_chat_bubble_text(self):
         window_width = PetWindow._desired_width(
             SimpleNamespace(cell_width=140, message_bubble_width=320)
+        )
+        short_text_width = PetWindow._desired_width(
+            SimpleNamespace(cell_width=140, message_bubble_width=320),
+            {**self.message, "text": "Hello"},
         )
         long_text_width = PetWindow._desired_width(
             SimpleNamespace(cell_width=140, message_bubble_width=320),
             {**self.message, "text": self.message["text"] * 40},
         )
-        self.assertEqual(window_width, long_text_width)
+        self.assertGreaterEqual(short_text_width, window_width)
+        self.assertGreater(long_text_width, window_width)
+
+    def test_chat_layout_uses_the_side_with_more_edge_space(self):
+        monitor = SimpleNamespace(get_workarea=lambda: SimpleNamespace(
+            x=0, y=0, width=1920, height=1080
+        ))
+        display = SimpleNamespace(
+            get_monitor_at_point=lambda *_: monitor,
+            get_primary_monitor=lambda: monitor,
+        )
+        message = {**self.message, "text": "A long enough message to need room."}
+
+        def options(plugin_side, pet_x):
+            window = SimpleNamespace(
+                plugin_side=plugin_side,
+                layout=SimpleNamespace(pet_x=pet_x, pet_top=80),
+                cell_width=140,
+                message_bubble_width=320,
+                chat_bubble_font_size=14,
+                chat_bubble_aspect_ratio=1.8,
+                chat_bubble_corner_radius=22,
+                get_display=lambda: display,
+                get_position=lambda: (0, 0),
+            )
+            layout_plugin_side, chat_side, max_width = PetWindow._chat_layout_options(
+                window, message
+            )
+            width = PetWindow._desired_width(window, message, max_width)
+            layout = compute_layout(
+                width, 140, 100, plugin_side=layout_plugin_side,
+                chat_message=message, chat_side=chat_side,
+                chat_max_width=max_width,
+            )
+            bubble_x = pet_x - layout.pet_x + layout.chat_bubble.rect.x
+            bubble_right = bubble_x + layout.chat_bubble.rect.width
+            self.assertGreaterEqual(bubble_x, 0)
+            self.assertLessEqual(bubble_right, 1920)
+            return layout_plugin_side, chat_side
+
+        left_edge = options("right", 40)
+        self.assertEqual(left_edge, ("left", "right"))
+        right_edge = options("left", 1740)
+        self.assertEqual(right_edge, ("right", "left"))
 
 
 if __name__ == "__main__":

@@ -655,15 +655,16 @@ class MotionGUITests(unittest.TestCase):
     # -- overlay / top-edge concern --------------------------------------
 
     def test_overlay_chips_above_pet_visible_at_top_edge(self):
-        """Plugin chips above the pet stay visible when pet is near top edge.
-
-        relayout must clamp the whole layout (chips + pet + messages) inside
-        the workarea so nothing clips at the top edge.
-        """
+        """Adding a plugin chip band must not move the sprite at the top edge."""
         window = self.make_window()
-        x, y = self._start_follow(window)
+        window.motion_off_item.set_active(True)
+        x, y = 500, 10
         # Place pet near the top edge (small y).
-        window.motion.set_position(x, 10)
+        window.move(x, 10)
+        while GLib.MainContext.default().pending():
+            GLib.MainContext.default().iteration(False)
+        window.motion.set_position(*window.get_position())
+        pet_screen_y = window.motion.position[1] + window.layout.pet_top
         # Add a plugin surface -> chips appear above pet -> pet_top increases.
         from openpets_linux.plugin_ui import PROVIDERS
         fixture = {"id": "battery", "label": "Battery", "value": "73%",
@@ -677,21 +678,26 @@ class MotionGUITests(unittest.TestCase):
                 time.sleep(0.01)
         # Force a relayout with the new chip content.
         window.refresh()
-        # The controller position should be synced and the window top
-        # clamped so chips (at window_y + CHIP_TOP_GAP) stay visible.
-        self.assertGreaterEqual(window.motion.position[1], 0)
-        # Sprite anchor: pet_top should still be at a valid screen position.
-        self.assertGreaterEqual(window.layout.pet_top, 0)
+        self.assertEqual(
+            window.motion.position[1] + window.layout.pet_top,
+            pet_screen_y,
+            "adding plugin layout content must not move the pet sprite",
+        )
 
     def test_content_expiry_resizing_preserves_sprite_anchor(self):
         """Message appearing/disappearing (content change) must not jump the
         sprite anchor when the pet is near the top edge."""
         window = self.make_window()
-        x, y = self._start_follow(window)
-        window.motion.set_position(x, 20)
-        # Sync controller to actual position.
+        window.motion_off_item.set_active(True)
+        x, y = 500, 20
+        window.move(x, y)
+        while GLib.MainContext.default().pending():
+            GLib.MainContext.default().iteration(False)
         window.motion.set_position(*window.get_position())
-        sx, sy = window.motion.position
+        sprite_anchor = (
+            window.motion.position[0] + window.layout.pet_x,
+            window.motion.position[1] + window.layout.pet_top,
+        )
         # Add a message (content below pet increases total_height).
         window.state.apply({
             "type": "notify",
@@ -699,13 +705,11 @@ class MotionGUITests(unittest.TestCase):
                              "threadId": "top-edge-test"},
         })
         window.refresh()
-        # Sprite screen anchor should be preserved (pet_top unchanged since
-        # no chips above; y should not have jumped).
-        nx, ny = window.motion.position
-        # The window may have been clamped, but sprite should not have jumped
-        # by more than the layout change allows.
-        self.assertLessEqual(abs(ny - sy), window.layout.total_height,
-                             f"sprite jumped from y={sy} to y={ny}")
+        next_anchor = (
+            window.motion.position[0] + window.layout.pet_x,
+            window.motion.position[1] + window.layout.pet_top,
+        )
+        self.assertEqual(next_anchor, sprite_anchor)
         window.state.clear_messages()
         window.refresh()
 

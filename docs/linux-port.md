@@ -57,11 +57,10 @@ background blur. The circular expand/collapse control sits at the pet's upper
 right; when collapsed it carries a red unread dot. Active notifications appear
   as temporary previews when collapsed (including existing messages at collapse),
   with an independent timer per thread; same-thread updates reset that timer.
-  When the comic-bubble queue is still visible at preview expiry, removal is
-  deferred until the final bubble expires to avoid shifting the pet mid-message.
-  Comic bubbles render in a separate input-transparent GTK window and are
-  raster-cached; moving the pet repositions the window without rerendering the
-  bubble, while content/style/side changes invalidate the cache.
+  Preview cards expire on their own per-thread timers, independently of the
+  comic-bubble queue. Comic bubbles are drawn in the pet window's layout, which
+  expands to fit the current bubble and contracts when the queue empties; every
+  relayout keeps the sprite at its existing screen position.
 The control hides 2.5 seconds after the pointer leaves the pet and returns when
 the pointer enters the pet's clickable area. A new notification received while
 collapsed also reveals its preview and control briefly, even if auto-hide had
