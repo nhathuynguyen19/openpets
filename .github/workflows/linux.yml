@@ -5,6 +5,7 @@ on:
     branches: [ "main" ]
   push:
     branches: [ "main" ]
+    tags: [ "linux-v*" ]
   workflow_dispatch:
     inputs:
       version:
@@ -12,15 +13,15 @@ on:
         required: false
         default: "0.1.0"
 
-# Read-only permissions: this workflow builds, tests, and uploads build
-# artifacts only. It never publishes a release and requires no credentials.
-# A separate manual tag-based release job can be added later once publishing
-# is verified; initial CI output is artifact-only, not auto-published.
+# Normal PR/main runs upload a build artifact only. Linux version tags also
+# publish the tested .deb to the matching GitHub Release.
 permissions:
   contents: read
 
 jobs:
   test-and-package:
+    outputs:
+      package_version: ${{ steps.package_version.outputs.version }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
@@ -67,9 +68,22 @@ jobs:
           xvfb-run -a "$RUNNER_TEMP/openpets-mcp/bin/python" -m unittest discover -s Linux/tests -p test_gui_features.py -v
           xvfb-run -a "$RUNNER_TEMP/openpets-mcp/bin/python" -m openpets_linux --smoke-test
 
-      - name: Build .deb package
+      - name: Resolve Debian package version
+        id: package_version
         env:
-          PACKAGE_VERSION: ${{ github.event.inputs.version || '0.1.0' }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [[ "$GITHUB_REF_NAME" == linux-v* ]]; then
+            PACKAGE_VERSION="${GITHUB_REF_NAME#linux-v}"
+          elif [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            PACKAGE_VERSION="$INPUT_VERSION"
+          else
+            PACKAGE_VERSION="0.1.0"
+          fi
+          echo "version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> "$GITHUB_ENV"
+
+      - name: Build .deb package
         run: |
           bash scripts/package-linux.sh "$PACKAGE_VERSION" "$RUNNER_TEMP/linux-debs"
 
@@ -78,6 +92,9 @@ jobs:
           shopt -s nullglob
           debs=("$RUNNER_TEMP/linux-debs"/openpets_*_all.deb)
           test "${#debs[@]}" -eq 1
+          test "$(dpkg-deb -f "${debs[0]}" Package)" = "openpets"
+          test "$(dpkg-deb -f "${debs[0]}" Version)" = "$PACKAGE_VERSION"
+          test "$(dpkg-deb -f "${debs[0]}" Architecture)" = "all"
           dpkg-deb -I "${debs[0]}"
           dpkg-deb --contents "${debs[0]}"
 
@@ -87,3 +104,37 @@ jobs:
           name: openpets-linux-deb
           path: ${{ runner.temp }}/linux-debs/*.deb
           retention-days: 30
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/linux-v')
+    needs: test-and-package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download tested Debian package
+        uses: actions/download-artifact@v5
+        with:
+          name: openpets-linux-deb
+          path: ${{ runner.temp }}/linux-debs
+
+      - name: Verify release tag and package version
+        env:
+          PACKAGE_VERSION: ${{ needs.test-and-package.outputs.package_version }}
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#linux-v}"
+          test "$TAG_VERSION" = "$PACKAGE_VERSION"
+          DEB="$RUNNER_TEMP/linux-debs/openpets_${PACKAGE_VERSION}_all.deb"
+          test -f "$DEB"
+          test "$(dpkg-deb -f "$DEB" Package)" = "openpets"
+          test "$(dpkg-deb -f "$DEB" Version)" = "$PACKAGE_VERSION"
+          test "$(dpkg-deb -f "$DEB" Architecture)" = "all"
+
+      - name: Publish Linux release package
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: OpenPets Linux ${{ needs.test-and-package.outputs.package_version }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: ${{ runner.temp }}/linux-debs/openpets_${{ needs.test-and-package.outputs.package_version }}_all.deb
