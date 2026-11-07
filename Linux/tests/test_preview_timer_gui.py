@@ -44,7 +44,7 @@ class PreviewTimerGUITests(unittest.TestCase):
             "linuxPlugins": {"chatBubble": True},
             "motionMode": "off",
             "display": {"messagesCollapsed": True,
-                        "chatBubbleDurationSeconds": 8,
+                        "chatBubbleReadingSpeedWordsPerSecond": 3.0,
                         "collapsedMessagePreviewSeconds": 10},
         })
         self.window = PetWindow(bundled_starcorn_path(), .37, self.socket_path)

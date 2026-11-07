@@ -44,16 +44,28 @@ class ChatClassificationTests(unittest.TestCase):
     def test_chat_bubble_plugin_is_opt_in(self):
         self.assertFalse(DEFAULT_CONFIG["linuxPlugins"]["chatBubble"])
         self.assertEqual(DEFAULT_CONFIG["display"]["chatBubbleOpacity"], 0.94)
-        self.assertEqual(DEFAULT_CONFIG["display"]["chatBubbleDurationSeconds"], 5)
+        self.assertEqual(
+            DEFAULT_CONFIG["display"]["chatBubbleReadingSpeedWordsPerSecond"], 3.0
+        )
 
-    def test_chat_bubble_duration_is_independent_of_message_preview_duration(self):
-        class Durations:
+    def test_chat_bubble_duration_uses_each_message_word_count(self):
+        class ReadingSpeed:
             collapsed_message_preview_seconds = 11
-            chat_bubble_duration_seconds = 4
+            chat_bubble_reading_speed_words_per_second = 2.0
+            plugins = SimpleNamespace(chat_bubble=SimpleNamespace(current={"text": "one two three four five"}))
 
-        durations = Durations()
-        self.assertEqual(PetWindow._preview_ttl(durations), 11)
-        self.assertEqual(PetWindow._chat_bubble_ttl(durations), 4)
+        settings = ReadingSpeed()
+        self.assertEqual(PetWindow._preview_ttl(settings), 11)
+        self.assertEqual(PetWindow._chat_bubble_ttl(settings), 3)
+        self.assertEqual(
+            PetWindow._chat_bubble_ttl(settings, {"text": "short message"}), 1
+        )
+        self.assertEqual(PetWindow._chat_bubble_ttl(settings, {"text": None}), 1)
+        self.assertEqual(PetWindow._chat_bubble_ttl(settings, {}), 1)
+        settings.chat_bubble_reading_speed_words_per_second = 0.5
+        self.assertEqual(
+            PetWindow._chat_bubble_ttl(settings, {"text": "word " * 100}), 60
+        )
 
     def test_chat_kind_stays_in_existing_message_and_preview_surfaces(self):
         notification = {

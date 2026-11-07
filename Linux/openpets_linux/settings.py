@@ -58,7 +58,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "chatBubbleAspectRatio": 1.8,
         "chatBubbleCornerRadiusPercent": 22.0,
         "chatBubbleOpacity": 0.94,
-        "chatBubbleDurationSeconds": 5,
+        "chatBubbleReadingSpeedWordsPerSecond": 3.0,
         "pluginSide": "right",
         "collapsedMessagePreviewSeconds": 5,
     },

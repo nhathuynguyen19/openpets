@@ -104,7 +104,7 @@ class MotionGUITests(unittest.TestCase):
         window = self.make_window()
         window.motion.set_mode(MODE_FREE_ROAM)
         window.chat_bubble_enabled = True
-        window.chat_bubble_duration_seconds = 60
+        window.chat_bubble_reading_speed_words_per_second = 3.0
 
         window.handle_command({
             "type": "notify",

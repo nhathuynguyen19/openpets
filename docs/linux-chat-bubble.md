@@ -23,9 +23,11 @@ the side opposite the plugin status stack.
   the rendered width and height, producing horizontal and vertical radii.
 - **Settings → Comic chat bubble opacity** adjusts the complete balloon
   (background, outline, pointer, and text) from fully transparent to opaque.
-- **Settings → Comic chat bubble duration** independently controls how long a
-  queued chat bubble stays visible (1–60 seconds). It does not change the
-  lifetime of collapsed message previews.
+- **Settings → Comic chat bubble reading speed (words/second)** controls how
+  long each queued bubble stays visible. Its duration is the message detail's
+  whitespace-separated word count divided by the selected speed, rounded up to
+  whole seconds and bounded to 1–60 seconds. It does not change the lifetime of
+  collapsed message previews.
 - The bubble is drawn inside the pet window's layout. Its width and height
   expand that layout while it is visible; the window contracts after the queue
   empties, while relayouts keep the pet sprite fixed at its screen position.
@@ -37,7 +39,7 @@ the side opposite the plugin status stack.
 - Every `notify` is normalized to `kind: "chat"`, including lifecycle updates.
   Its `status` is preserved for task animation and lifecycle behavior. Chat
   notifications enter a FIFO queue, including repeated updates on the same
-  thread; one item is shown per configured chat-bubble duration, with up to 50
+  thread; each item is shown for its own reading-time duration, with up to 50
   pending items.
 - Chat entries remain in notification history. Clicking the balloon opens
   notification history. Transparent areas remain click-through.

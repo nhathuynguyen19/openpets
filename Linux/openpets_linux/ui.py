@@ -167,15 +167,19 @@ class PetWindow(Gtk.Window):
         except OverflowError:
             preview_seconds = 5
         self.collapsed_message_preview_seconds = int(round(max(1, min(60, float(preview_seconds)))))
-        bubble_duration = display_settings.get("chatBubbleDurationSeconds", 5)
-        if isinstance(bubble_duration, bool) or not isinstance(bubble_duration, (int, float)):
-            bubble_duration = 5
+        bubble_reading_speed = display_settings.get(
+            "chatBubbleReadingSpeedWordsPerSecond", 3.0
+        )
+        if isinstance(bubble_reading_speed, bool) or not isinstance(bubble_reading_speed, (int, float)):
+            bubble_reading_speed = 3.0
         try:
-            if not math.isfinite(bubble_duration):
-                bubble_duration = 5
+            if not math.isfinite(bubble_reading_speed):
+                bubble_reading_speed = 3.0
         except OverflowError:
-            bubble_duration = 5
-        self.chat_bubble_duration_seconds = int(round(max(1, min(60, float(bubble_duration)))))
+            bubble_reading_speed = 3.0
+        self.chat_bubble_reading_speed_words_per_second = max(
+            0.5, min(10.0, float(bubble_reading_speed))
+        )
         self.unread_message_count = 0
         self._known_message_ids = set()
         self._task_motion_frozen = False
@@ -460,13 +464,19 @@ class PetWindow(Gtk.Window):
         scales.append(("collapsedMessagePreviewSeconds", preview))
         row += 1
 
-        chat_duration = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 1, 60, 1)
-        chat_duration.set_digits(0)
-        chat_duration.set_value(float(self.chat_bubble_duration_seconds))
-        chat_duration.set_hexpand(True)
-        grid.attach(Gtk.Label(label="Comic chat bubble duration (seconds)", xalign=0), 0, row, 1, 1)
-        grid.attach(chat_duration, 1, row, 1, 1)
-        scales.append(("chatBubbleDurationSeconds", chat_duration))
+        chat_reading_speed = Gtk.Scale.new_with_range(
+            Gtk.Orientation.HORIZONTAL, 0.5, 10.0, 0.5
+        )
+        chat_reading_speed.set_digits(1)
+        chat_reading_speed.set_value(
+            float(self.chat_bubble_reading_speed_words_per_second)
+        )
+        chat_reading_speed.set_hexpand(True)
+        grid.attach(Gtk.Label(
+            label="Comic chat bubble reading speed (words/second)", xalign=0
+        ), 0, row, 1, 1)
+        grid.attach(chat_reading_speed, 1, row, 1, 1)
+        scales.append(("chatBubbleReadingSpeedWordsPerSecond", chat_reading_speed))
         row += 1
 
         side_left = Gtk.RadioButton.new_with_label_from_widget(None, "Plugin stack: Left")
@@ -545,9 +555,10 @@ class PetWindow(Gtk.Window):
         chat_corner_radius = bounded(
             "chatBubbleCornerRadiusPercent", self.chat_bubble_corner_radius, 0, 50
         )
-        chat_duration = bounded(
-            "chatBubbleDurationSeconds", self.chat_bubble_duration_seconds,
-            1, 60, integer=True,
+        chat_reading_speed = bounded(
+            "chatBubbleReadingSpeedWordsPerSecond",
+            self.chat_bubble_reading_speed_words_per_second,
+            0.5, 10.0,
         )
         animation_speed = bounded(
             "animationSpeed", self.animation_speed, 0.5, 2.0
@@ -566,7 +577,7 @@ class PetWindow(Gtk.Window):
             "chatBubbleFontSize": chat_font_size,
             "chatBubbleAspectRatio": chat_aspect_ratio,
             "chatBubbleCornerRadiusPercent": chat_corner_radius,
-            "chatBubbleDurationSeconds": chat_duration,
+            "chatBubbleReadingSpeedWordsPerSecond": chat_reading_speed,
             "themeMode": theme,
             "pluginOpacity": bounded("pluginOpacity", 0.94, 0.0, 1.0),
             "messageOpacity": bounded("messageOpacity", 0.94, 0.0, 1.0),
@@ -593,7 +604,7 @@ class PetWindow(Gtk.Window):
         self.chat_bubble_font_size = chat_font_size
         self.chat_bubble_aspect_ratio = chat_aspect_ratio
         self.chat_bubble_corner_radius = chat_corner_radius
-        self.chat_bubble_duration_seconds = chat_duration
+        self.chat_bubble_reading_speed_words_per_second = chat_reading_speed
         if self.chat_bubble_enabled and self.plugins.chat_bubble.current is not None:
             self._schedule_chat_bubble_advance()
         self.appearance.update({
@@ -851,13 +862,20 @@ class PetWindow(Gtk.Window):
                 self._chat_bubble_ttl(), self._advance_chat_bubble
             )
 
-    def _chat_bubble_ttl(self) -> int:
-        """Return chat queue duration independently of message preview lifetime."""
+    def _chat_bubble_ttl(self, message=None) -> int:
+        """Return this bubble's bounded display time from its word count."""
+        if message is None:
+            message = self.plugins.chat_bubble.current
+        text = message.get("text") if isinstance(message, dict) else ""
+        word_count = len(str(text or "").split())
         try:
-            value = int(round(float(self.chat_bubble_duration_seconds)))
+            reading_speed = float(self.chat_bubble_reading_speed_words_per_second)
         except (TypeError, ValueError, OverflowError):
-            return 5
-        return max(1, min(60, value))
+            reading_speed = 3.0
+        if not math.isfinite(reading_speed):
+            reading_speed = 3.0
+        reading_speed = max(0.5, min(10.0, reading_speed))
+        return max(1, min(60, math.ceil(word_count / reading_speed)))
 
     def _advance_chat_bubble(self):
         self.chat_bubble_source = 0

@@ -92,7 +92,7 @@ class TestCollapsedMessagePreviewGUI(unittest.TestCase):
             window = self._make_window(directory)
             del window.relayout  # use the real path that rebuilds the pet layout
             window.chat_bubble_enabled = True
-            window.chat_bubble_duration_seconds = 8
+            window.chat_bubble_reading_speed_words_per_second = 3.0
             scheduled = []
 
             def capture_timeout(delay, callback):
