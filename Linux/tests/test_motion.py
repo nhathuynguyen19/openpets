@@ -34,9 +34,6 @@ from openpets_linux.motion import (  # noqa: E402
     ROAM_SEGMENT_MAX_SEC,
     ROAM_REST_MIN_SEC,
     ROAM_REST_MAX_SEC,
-    ROAM_REST_DURING_CHANCE,
-    ROAM_REST_DURING_MIN_SEC,
-    ROAM_REST_DURING_MAX_SEC,
     ARRIVAL_THRESHOLD_PX,
     MAX_DT_SEC,
     MotionController,
@@ -778,12 +775,6 @@ class TestRoamPacingConstants(unittest.TestCase):
         self.assertGreater(ROAM_REST_MIN_SEC, 0)
         self.assertGreater(ROAM_REST_MAX_SEC, ROAM_REST_MIN_SEC)
 
-    def test_rest_during_bounds(self):
-        self.assertGreaterEqual(ROAM_REST_DURING_CHANCE, 0.0)
-        self.assertLessEqual(ROAM_REST_DURING_CHANCE, 1.0)
-        self.assertGreater(ROAM_REST_DURING_MIN_SEC, 0)
-        self.assertGreater(ROAM_REST_DURING_MAX_SEC, ROAM_REST_DURING_MIN_SEC)
-
 
 class TestFreeRoamPacing(unittest.TestCase):
     """Free-roam natural pacing: walks, rests, variable speed, no dt bursts."""
@@ -846,7 +837,7 @@ class TestFreeRoamPacing(unittest.TestCase):
         # No dt burst: moving_since_ms anchored to now.
         self.assertEqual(self.mc.state.moving_since_ms, self.clock() * 1000.0)
 
-    def test_midroute_rest_resume_gets_fresh_segment_no_idle_chain(self):
+    def test_waypoint_rest_resume_gets_fresh_segment_no_idle_chain(self):
         self.mc.state.pace_mode = "resting"
         self.mc.state.pace_rest_end_ms = self.clock() * 1000.0 - 1
         self.mc.state.waypoint = (1800, 500)
@@ -881,6 +872,24 @@ class TestFreeRoamPacing(unittest.TestCase):
                 break
         # Should see at least two different speeds within one route.
         self.assertGreaterEqual(len(speeds), 2, f"speeds seen: {speeds}")
+
+    def test_speed_segment_change_does_not_stop_before_waypoint(self):
+        """Changing pace in a leg must keep walking until its waypoint."""
+        self.mc.set_position(100, 500)
+        self.mc.state.waypoint = (1800, 500)
+        self.mc.state.pace_mode = "walking"
+        self.mc.state.pace_segment_end_ms = self.clock() * 1000.0 - 1.0
+        self.mc.state.moving_since_ms = self.clock() * 1000.0
+
+        # Force the old mid-leg rest branch at a speed boundary.
+        with patch.object(self.mc._rng, "random", return_value=0.0):
+            self.clock.advance(0.033)
+            result = self.mc.tick(now=self.clock())
+
+        self.assertEqual(self.mc.state.pace_mode, "walking")
+        self.assertIsNotNone(result)
+        self.assertIsNotNone(result[1], "mid-leg speed change dropped the gait")
+        self.assertFalse(result[2], "pet settled before reaching its waypoint")
 
     def test_slow_base_speed(self):
         # Roam baseline speed should be well below follow-cursor 120.

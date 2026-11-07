@@ -1113,9 +1113,20 @@ class PetWindow(Gtk.Window):
             self.frame += 1
             if self.frame >= len(DURATIONS[self.current_animation]):
                 self.frame = 0
-                if not self.drag_active and self.cycles_remaining is not None:
+                motion_gait_visible = (
+                    self.motion_animation is not None and not self.drag_active
+                )
+                if (
+                    not self.drag_active
+                    and not motion_gait_visible
+                    and self.cycles_remaining is not None
+                ):
                     self.cycles_remaining -= 1
-                if not self.drag_active and (not self.state.loop or self.cycles_remaining == 0):
+                if (
+                    not self.drag_active
+                    and not motion_gait_visible
+                    and (not self.state.loop or self.cycles_remaining == 0)
+                ):
                     self.state.stop_animation()
                     self.current_animation = self.state.animation
                     self.cycles_remaining = None

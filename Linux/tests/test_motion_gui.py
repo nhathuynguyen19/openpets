@@ -561,6 +561,24 @@ class MotionGUITests(unittest.TestCase):
         self.assertGreater(window.motion.position[0], x)
         self.assertEqual(window.motion_animation, "running-right")
 
+    def test_free_roam_gait_does_not_fall_back_to_idle_at_frame_cycle(self):
+        """A non-looping underlying pose must not interrupt a live roam gait."""
+        from openpets_linux.animation import ANIMATION_DURATIONS
+        from openpets_linux.motion import MODE_FREE_ROAM
+
+        window = self.make_window()
+        window.motion.mode = MODE_FREE_ROAM
+        window.motion.state.pace_mode = "walking"
+        window.motion.state.pace_speed = 100.0
+        window.motion_animation = "running-right"
+        window.current_animation = "running-right"
+        window.frame = len(ANIMATION_DURATIONS["running-right"]) - 1
+        window.state.loop = False
+
+        window.advance_frame()
+
+        self.assertEqual(window.current_animation, "running-right")
+
     def test_follow_cursor_left_moves_left(self):
         """Regression: cursor left of window must move LEFT, not right.
 

@@ -44,9 +44,6 @@ __all__ = [
     "ROAM_SEGMENT_MAX_SEC",
     "ROAM_REST_MIN_SEC",
     "ROAM_REST_MAX_SEC",
-    "ROAM_REST_DURING_CHANCE",
-    "ROAM_REST_DURING_MIN_SEC",
-    "ROAM_REST_DURING_MAX_SEC",
     "ROAM_PATH_MAX_ANGLE_RAD",
     "ARRIVAL_THRESHOLD_PX",
     "MAX_DT_SEC",
@@ -101,12 +98,6 @@ ROAM_SEGMENT_MAX_SEC = 4.0
 # Rest between walks (seconds). Truly stops: no gait override, no movement.
 ROAM_REST_MIN_SEC = 1.5
 ROAM_REST_MAX_SEC = 5.0
-
-# Rest *during* a walk (mid-trajectory): chance per segment-end to briefly
-# pause before continuing to the same waypoint.
-ROAM_REST_DURING_CHANCE = 0.12
-ROAM_REST_DURING_MIN_SEC = 0.5
-ROAM_REST_DURING_MAX_SEC = 2.0
 
 # Maximum angle (radians) of a free-roam path away from horizontal. Paths are
 # diagonal at a random shallow angle so movement is never straight vertical and
@@ -463,17 +454,10 @@ class MotionController:
                 # No dt burst on rest resume: anchor to now.
                 self.state.moving_since_ms = now_ms
 
-            # Walking: handle mid-trajectory segment end (speed change or
-            # brief rest during walk, independent of waypoint arrival).
+            # Walking: speed changes stay within the current leg. Rest only
+            # after reaching the waypoint so a pace transition cannot drop the
+            # gait or make the pet appear to stop before its destination.
             if now_ms >= self.state.pace_segment_end_ms:
-                if self._rng.random() < ROAM_REST_DURING_CHANCE:
-                    self._start_roam_rest(now_ms)
-                    self.state.settled = True
-                    clamped = clamp_position_to_workarea(
-                        self.position[0], self.position[1],
-                        self.size[0], self.size[1], self.workarea
-                    )
-                    return (clamped, None, True)
                 self._pick_roam_speed(now_ms)
 
             target = self.state.waypoint
